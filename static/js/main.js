@@ -8,6 +8,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let sortOrder = 'newest';
     let currentSelectedRelease = null;
 
+    // Theme Config (check localstorage or default to dark)
+    let currentTheme = localStorage.getItem('theme') || 'dark';
+    document.body.setAttribute('data-theme', currentTheme);
+    updateThemeToggleIcons();
+
     // DOM Elements
     const refreshBtn = document.getElementById('refresh-btn');
     const refreshIcon = document.getElementById('refresh-icon');
@@ -19,6 +24,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const skeletonLoader = document.getElementById('skeleton-loader');
     const emptyState = document.getElementById('empty-state');
     const connectionStatusText = document.getElementById('connection-status');
+    const exportCsvBtn = document.getElementById('export-csv-btn');
+    const themeToggleBtn = document.getElementById('theme-toggle');
+    const themeSunIcon = document.getElementById('theme-sun-icon');
+    const themeMoonIcon = document.getElementById('theme-moon-icon');
     
     // Modal DOM Elements
     const tweetModal = document.getElementById('tweet-modal');
@@ -42,6 +51,17 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => {
             toast.classList.remove('active');
         }, 3000);
+    }
+
+    // Theme Toggle update icons
+    function updateThemeToggleIcons() {
+        if (currentTheme === 'light') {
+            themeSunIcon.classList.add('hidden');
+            themeMoonIcon.classList.remove('hidden');
+        } else {
+            themeSunIcon.classList.remove('hidden');
+            themeMoonIcon.classList.add('hidden');
+        }
     }
 
     // Fetch Release Notes from API
@@ -86,11 +106,13 @@ document.addEventListener('DOMContentLoaded', () => {
             emptyState.classList.add('hidden');
             refreshIcon.classList.add('loading-spinner');
             refreshBtn.disabled = true;
+            exportCsvBtn.disabled = true;
         } else {
             skeletonLoader.classList.add('hidden');
             releasesGrid.classList.remove('hidden');
             refreshIcon.classList.remove('loading-spinner');
             refreshBtn.disabled = false;
+            exportCsvBtn.disabled = false;
         }
     }
 
@@ -107,7 +129,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Filter, sort and render the list of releases
-    function filterAndRenderReleases() {
+    function getFilteredReleases() {
         // 1. Filter by category
         let filtered = releases.filter(item => {
             if (activeCategory === 'all') return true;
@@ -127,7 +149,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 3. Sort by Date
         filtered.sort((a, b) => {
-            // Parse custom Google dates (e.g., "June 15, 2026")
             const dateA = new Date(a.date);
             const dateB = new Date(b.date);
             
@@ -138,6 +159,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
+        return filtered;
+    }
+
+    function filterAndRenderReleases() {
+        const filtered = getFilteredReleases();
         renderGrid(filtered);
     }
 
@@ -170,16 +196,34 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                 </div>
                 <div class="card-actions">
+                    <button class="btn-copy" data-id="${item.id}">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                            <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+                        </svg>
+                        <span>Copy</span>
+                    </button>
                     <button class="btn-share" data-id="${item.id}">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
                             <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
                         </svg>
-                        <span>Share update</span>
+                        <span>Share</span>
                     </button>
                 </div>
             `;
             
             releasesGrid.appendChild(card);
+        });
+
+        // Add event listeners to copy buttons
+        const copyBtns = releasesGrid.querySelectorAll('.btn-copy');
+        copyBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const releaseId = btn.getAttribute('data-id');
+                const selected = releases.find(r => r.id === releaseId);
+                if (selected) {
+                    copyToClipboard(selected, btn);
+                }
+            });
         });
 
         // Add event listeners to the new share buttons
@@ -193,6 +237,80 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
         });
+    }
+
+    // Copy to clipboard helper
+    function copyToClipboard(release, button) {
+        const cleanText = stripHtml(release.body).trim();
+        const formattedCopyText = `BigQuery ${release.category} (${release.date}):\n${cleanText}\n\nRead more: ${release.link || 'https://cloud.google.com/bigquery/docs/release-notes'}`;
+        
+        navigator.clipboard.writeText(formattedCopyText).then(() => {
+            const span = button.querySelector('span');
+            const originalText = span.textContent;
+            
+            // Temporary visual feedback
+            span.textContent = 'Copied!';
+            button.style.borderColor = 'var(--accent-color)';
+            button.style.color = 'var(--accent-color)';
+            
+            showToast("Copied release note to clipboard!");
+            
+            setTimeout(() => {
+                span.textContent = originalText;
+                button.style.borderColor = '';
+                button.style.color = '';
+            }, 2000);
+        }).catch(err => {
+            console.error("Clipboard copy failed: ", err);
+            showToast("Failed to copy to clipboard.");
+        });
+    }
+
+    // Export current list to CSV
+    function exportToCSV() {
+        const filtered = getFilteredReleases();
+        
+        if (filtered.length === 0) {
+            showToast("No release notes available to export!");
+            return;
+        }
+
+        // CSV headers
+        const headers = ["Date", "Category", "Update Detail", "Link Reference"];
+        
+        // CSV rows structure
+        const rows = filtered.map(item => {
+            const cleanBody = stripHtml(item.body).replace(/"/g, '""').replace(/\r?\n|\r/g, ' ').trim();
+            return [
+                `"${item.date.replace(/"/g, '""')}"`,
+                `"${item.category.replace(/"/g, '""')}"`,
+                `"${cleanBody}"`,
+                `"${item.link.replace(/"/g, '""')}"`
+            ];
+        });
+
+        // Combine to one string
+        const csvContent = [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+        
+        // Export using Blob to handle complex encodings
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.setAttribute("href", url);
+        
+        // File naming conventions
+        const dateTag = new Date().toISOString().slice(0, 10);
+        const filename = `bigquery_release_notes_${activeCategory}_${dateTag}.csv`;
+        
+        link.setAttribute("download", filename);
+        document.body.appendChild(link);
+        link.click();
+        
+        // Cleanup DOM
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        
+        showToast(`Exported ${filtered.length} notes to CSV successfully!`);
     }
 
     // Helper to strip HTML tags for clean text drafting
@@ -276,6 +394,23 @@ document.addEventListener('DOMContentLoaded', () => {
     // Refresh action
     refreshBtn.addEventListener('click', () => {
         fetchReleases(true);
+    });
+
+    // CSV Export action
+    exportCsvBtn.addEventListener('click', exportToCSV);
+
+    // Theme toggle action
+    themeToggleBtn.addEventListener('click', () => {
+        if (currentTheme === 'dark') {
+            currentTheme = 'light';
+        } else {
+            currentTheme = 'dark';
+        }
+        
+        document.body.setAttribute('data-theme', currentTheme);
+        localStorage.setItem('theme', currentTheme);
+        updateThemeToggleIcons();
+        showToast(`Swapped to ${currentTheme} mode!`);
     });
 
     // Search input handler
